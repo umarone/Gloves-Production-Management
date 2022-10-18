@@ -1,0 +1,234 @@
+ALTER Procedure [Production].[Proc_GetWorkerInspectionAndPackingReport]      
+@IdCompany uniqueidentifier,      
+@AccountNo varchar(50),                
+@WorkType int,      
+@ProductionType int              
+as 
+begin 
+declare @ReportType as nvarchar(100)
+declare @DynamicQuery as nvarchar(max)  
+if(@WorkType = 1)  
+set @ReportType = '''Gloves Inspection''' + ',' + '''Garments Inpection'''   
+else  
+  set @ReportType = '''Gloves Packing''' + ','+ '''Garments Packing'''  
+
+  set @DynamicQuery = 'Select B.Brand_Name,I.ItemName,H.VDate,H.TotalAmount,D.ItemSize,I.PackingSize as ''UOM'',D.PackingStyle,D.Quality,D.Quantity,D.ReadyUnits,D.Rejection,    
+  D.BQuantity,D.RepairQuantity,      
+  D.Rate,D.Amount,D.InspectorRate,D.InspectorAmount,I.ItemNo,I.ItemCode,I.ItemName      
+  from [Production].[ProductionProcessesDetails] D             
+  Inner Join [Production].[ProductionHead] H ON D.Voucher_Id = H.Voucher_Id                         
+  left join [Setup].[Items] I ON D.Item_Id = I.Item_Id           
+  left join [Setup].[Brand] B On D.Brand_Id = B.Brand_Id      
+  where H.Company_Id = '''+convert(varchar(100),@IdCompany)+''' and D.AccountNo = '''+@AccountNo+'''   
+  and  D.ProcessName in ('+@ReportType+')'
+  exec sp_executesql @DynamicQuery
+end
+
+Go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    
+ALTER Procedure [Production].[Proc_GetWorkerInspectionAndPackingReportByDate]        
+@IdCompany uniqueidentifier,        
+@AccountNo varchar(50),        
+@StartDate datetime,        
+@EndDate datetime,                  
+@WorkType int,        
+@ProductionType int                
+as           
+if @StartDate is null         
+        Set @StartDate = '1800-01-01'        
+        
+    if @EndDate is null         
+        Set @EndDate = GetDate() + 365        
+    Set @StartDate = DATEADD(D, 0, DATEDIFF(D, 0, @StartDate))        
+        
+    Set @EndDate = DATEADD(D, 0, DATEDIFF(D, 0, @EndDate))        
+        
+    Set @EndDate = DateAdd(day, 1, @EndDate)     
+declare @ReportType as nvarchar(100)  
+declare @DynamicQuery as nvarchar(max)     
+if(@WorkType = 1)    
+set @ReportType = '''Gloves Inspection''' + ','+ '''Garments Inpection'''    
+else    
+set @ReportType = '''Gloves Packing''' + ','+ '''Garments Packing'''    
+set @DynamicQuery = 'Select  B.Brand_Name,I.ItemName,H.VDate,   H.TotalAmount,D.ItemSize,I.PackingSize as ''UOM'',D.PackingStyle,D.Quality,D.Quantity,D.ReadyUnits,D.Rejection,D.BQuantity,D.RepairQuantity,        
+D.Rate,D.Amount,D.InspectorRate,D.PackingCartons,D.InspectorAmount,I.ItemNo,I.ItemCode,I.ItemName        
+from [Production].[ProductionProcessesDetails] D               
+Inner Join [Production].[ProductionHead] H ON D.Voucher_Id = H.Voucher_Id                           
+left join [Setup].[Items] I ON D.Item_Id = I.Item_Id             
+left join [Setup].[Brand] B On D.Brand_Id = B.Brand_Id        
+where  H.Company_Id = '''+convert(varchar(100),@IdCompany)+''' and D.AccountNo = '''+@AccountNo+'''    
+and D.ProcessName in ('+@ReportType+') -- and WorkType = @WorkType and H.ProductionType = @ProductionType        
+and D.WorkDate between '''+convert(varchar(100),@StartDate)+''' and '''+convert(varchar(100),@EndDate)+''''    
+exec sp_executesql @DynamicQuery   
+
+Go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+ALTER Procedure [Production].[Proc_GetWorkInProcessReport]        
+@IdArticle uniqueidentifier,        
+@ProductionType bigint        
+as        
+select M.Article_Id, M.VDate as IssuanceDate,A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Article_Id = I.Item_Id        
+where M.Article_Id = @IdArticle and I.IsMandatory = 1        
+union all  
+select M.Article_Id, M.VDate as IssuanceDate,A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Item_Id = I.Item_Id        
+where M.Item_Id = @IdArticle and I.IsMandatory = 1        
+union all        
+select D.Item_Id as Article_Id, WorkDate as IssuanceDate,A.AccountName,0 as 'Out',D.Quantity 'IN' from [Production].[ProductionHead] H         
+Inner Join [Production].[ProductionProcessesDetails] D on H.Voucher_Id = D.Voucher_Id      
+Inner Join [Setup].[Accounts] A On A.AccountNo = D.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id        
+where D.Item_Id = @IdArticle and D.ProcessName in ('Gloves Stitching','Gloves Repair')  
+
+
+Go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ALTER Procedure [Production].[Proc_GetArticleWiseInOutStock]        
+@IdArticle uniqueidentifier,        
+@ProductionType bigint        
+as        
+select * from         
+(        
+select D.Item_Id, VDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,D.Units 'Out',0 as 'In' from [Transactions].[SalesHead] H         
+Inner Join [Transactions].[SalesDetail] D on H.Voucher_Id = D.Voucher_Id        
+Inner Join [Setup].[Accounts] A On A.AccountNo = H.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id        
+where D.Item_Id = @IdArticle        
+union all        
+select M.Article_Id, M.VDate as IssuanceDate,H.VoucherNo as 'IssuanceNo',A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Article_Id = I.Item_Id        
+where M.Article_Id = @IdArticle  
+union all  
+select M.Article_Id, M.VDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Item_Id = I.Item_Id        
+where M.Item_Id = @IdArticle       
+--union all        
+--select D.Article_Id, IssuanceDate,IssuanceNo,A.AccountName,D.Quantity as 'Out',0 as 'IN' from [Production].[Inventoryissuancehead] H         
+--Inner Join [Production].[InventoryIssuanceDetail] D on H.ProductionIssuance_Id = D.InventoryIssuance_Id        
+--Inner Join [Setup].[Accounts] A On A.AccountNo = H.AccountNo        
+--Inner Join [Setup].[Items] I On D.Article_Id = I.Item_Id        
+--where D.Article_Id = @IdArticle and H.IssuanceType = 1 and H.GatePassType = 'Gloves Repair' and H.ProductionType = @ProductionType        
+union all        
+select D.Item_Id as Article_Id, WorkDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,0 as 'Out',D.Quantity 'IN' from [Production].[ProductionHead] H         
+Inner Join [Production].[ProductionProcessesDetails] D on H.Voucher_Id = D.Voucher_Id      
+Inner Join [Setup].[Accounts] A On A.AccountNo = D.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id        
+where D.Item_Id = @IdArticle and D.ProcessName in ('Gloves Stitching','Gloves Repair')  
+)X Order by IssuanceDate  
+  
+
+go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ALTER Procedure [Production].[Proc_GetArticleDateWiseInOutStock]      
+@IdArticle uniqueidentifier,      
+@ProductionType bigint,      
+@StartDate datetime,      
+@EndDate datetime      
+as      
+if @StartDate is null       
+        Set @StartDate = '1800-01-01'      
+      
+    if @EndDate is null       
+        Set @EndDate = GetDate() + 365      
+    Set @StartDate = DATEADD(D, 0, DATEDIFF(D, 0, @StartDate))      
+      
+    Set @EndDate = DATEADD(D, 0, DATEDIFF(D, 0, @EndDate))      
+      
+    Set @EndDate = DateAdd(day, 1, @EndDate)  
+select * from      
+(      
+select D.Item_Id, VDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,D.Units 'Out',0 as 'In' from [Transactions].[SalesHead] H         
+Inner Join [Transactions].[SalesDetail] D on H.Voucher_Id = D.Voucher_Id        
+Inner Join [Setup].[Accounts] A On A.AccountNo = H.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id and H.VDate between @StartDate and @EndDate and IsNull(isDeleted,0) = 0       
+where D.Item_Id = @IdArticle        
+union all        
+select M.Article_Id, M.VDate as IssuanceDate,H.VoucherNo as 'IssuanceNo',A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Article_Id = I.Item_Id         
+where M.Article_Id = @IdArticle and H.VDate between @StartDate and @EndDate  
+union all  
+select M.Article_Id, M.VDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Item_Id = I.Item_Id        
+where M.Item_Id = @IdArticle and H.VDate between @StartDate and @EndDate       
+--union all        
+--select D.Article_Id, IssuanceDate,IssuanceNo,A.AccountName,D.Quantity as 'Out',0 as 'IN' from [Production].[Inventoryissuancehead] H         
+--Inner Join [Production].[InventoryIssuanceDetail] D on H.ProductionIssuance_Id = D.InventoryIssuance_Id        
+--Inner Join [Setup].[Accounts] A On A.AccountNo = H.AccountNo        
+--Inner Join [Setup].[Items] I On D.Article_Id = I.Item_Id        
+--where D.Article_Id = @IdArticle and H.IssuanceType = 1 and H.GatePassType = 'Gloves Repair' and H.ProductionType = @ProductionType        
+union all        
+select D.Item_Id as Article_Id, WorkDate as IssuanceDate,VoucherNo as 'IssuanceNo',A.AccountName,0 as 'Out',D.Quantity 'IN' from [Production].[ProductionHead] H         
+Inner Join [Production].[ProductionProcessesDetails] D on H.Voucher_Id = D.Voucher_Id      
+Inner Join [Setup].[Accounts] A On A.AccountNo = D.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id        
+where D.Item_Id = @IdArticle and D.WorkDate between @StartDate and @EndDate and D.ProcessName in ('Gloves Stitching','Gloves Repair')  
+)X   
+Order by IssuanceDate 
+
+Go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ALTER Procedure [Production].[Proc_GetDateWiseWorkInProcessReport]    
+@IdArticle uniqueidentifier,    
+@ProductionType bigint,    
+@StartDate datetime,    
+@EndDate datetime    
+as    
+if @StartDate is null       
+        Set @StartDate = '1800-01-01'      
+      
+if @EndDate is null       
+        Set @EndDate = GetDate() + 365      
+    Set @StartDate = DATEADD(D, 0, DATEDIFF(D, 0, @StartDate))      
+      
+    Set @EndDate = DATEADD(D, 0, DATEDIFF(D, 0, @EndDate))      
+      
+    Set @EndDate = DateAdd(day, 1, @EndDate)   
+select * from    
+(    
+select M.Article_Id, M.VDate as IssuanceDate,A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Article_Id = I.Item_Id        
+where M.Article_Id = @IdArticle and I.IsMandatory = 1     
+and M.VDate between @StartDate and @EndDate     
+union all  
+select M.Article_Id, M.VDate as IssuanceDate,A.AccountName,M.UsedQuantity 'Out',0 as 'In' from [Production].[MaterialUsed] M         
+Inner Join [Production].[ProductionHead] H on H.Voucher_Id = M.Voucher_Id  
+Inner Join [Setup].[Accounts] A On A.AccountNo = M.AccountNo        
+Inner Join [Setup].[Items] I On M.Item_Id = I.Item_Id        
+where M.Item_Id = @IdArticle and I.IsMandatory = 1  
+and M.VDate between @StartDate and @EndDate        
+union all        
+select D.Item_Id as Article_Id, WorkDate as IssuanceDate,A.AccountName,0 as 'Out',D.Quantity 'IN' from [Production].[ProductionHead] H         
+Inner Join [Production].[ProductionProcessesDetails] D on H.Voucher_Id = D.Voucher_Id      
+Inner Join [Setup].[Accounts] A On A.AccountNo = D.AccountNo        
+Inner Join [Setup].[Items] I On D.Item_Id = I.Item_Id        
+where D.Item_Id = @IdArticle and WorkDate between @StartDate and @EndDate and D.ProcessName in ('Gloves Stitching','Gloves Repair')   
+)X Order by IssuanceDate 
+
+Go
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------

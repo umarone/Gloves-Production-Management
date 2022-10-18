@@ -1,0 +1,333 @@
+ALTER Procedure [Production].[Proc_GetStitcherArticleWiseInfo]                
+@AccountNo varchar(50)                
+as                
+DECLARE @cols AS NVARCHAR(MAX),                
+    @query  AS NVARCHAR(MAX)                
+                
+select @cols = STUFF((SELECT distinct ',',  QUOTENAME(G.Group_Name)                
+      from                 
+      production.inventoryissuancehead H inner join production.inventoryissuancedetail d                
+      on H.ProductionIssuance_Id = d.InventoryIssuance_Id Inner join setup.items I                       
+      on I.Item_Id = d.Item_Id Inner Join [Setup].[Items] I1                
+      on I1.Item_Id = H.Article_Id           
+      Inner join Setup.Groups G on I.Group_Id = G.Group_Id          
+      where H.AccountNo = @AccountNo                          
+            FOR XML PATH(''), TYPE                
+            ).value('.', 'NVARCHAR(MAX)')                 
+        ,1,1,'')                
+                      
+set @query = 'SELECT IssuanceDate,ArticleName,IssuanceNo,                
+     case when IssuanceType = 1 Then  ''Out''  else  ''In'' end ''In/Out'', ' + @cols + ',ArticleIn,Balance from                 
+     (                
+    select * from                 
+    (                
+     select H.IssuanceDate, cast(H.IssuanceNo as varchar(50)) IssuanceNo,IssuanceType,        
+     --sum(Quantity) over(partition by G.Group_Name) Quantity,        
+     sum(Quantity) Quantity,        
+     I1.ItemName As ArticleName,Group_Name, 0 as ArticleIn,0 as Balance              
+     from production.inventoryissuancehead H inner join production.inventoryissuancedetail d                
+     on H.ProductionIssuance_Id = d.InventoryIssuance_Id Inner join setup.items I                       
+     on I.Item_Id = d.Item_Id Inner Join [Setup].[Items] I1                
+     on I1.Item_Id = H.Article_Id Inner join [Setup].[Groups] G           
+     on I.Group_Id = G.Group_Id           
+     where H.IssuanceType = 1 and H.ProductionType = 1 and H.AccountNo = '''+ Cast(@AccountNo as varchar(50)) +''' --and H.OperationType=6        
+     and IsNull(IsDeleted,0) = 0              
+     group by IssuanceDate,IssuanceNo,IssuanceType,Quantity,I1.ItemName,I.IsMandatory,G.Group_Name                 
+    )D group by IssuanceDate,IssuanceNo,IssuanceType,Quantity,ArticleIn,Balance,ArticleName,Group_Name                
+     ) x                
+  pivot                 
+     (                
+		   sum(Quantity)                
+		   for Group_Name in (' + @cols + ')                
+     ) p                
+     Union all                           
+    SELECT IssuanceDate,ArticleName,IssuanceNo,                
+     ''In'' as ''In/Out'', '+ @cols +',ArticleIn,Balance from                 
+     (                
+  select * from                 
+  (                
+   select D.WorkDate as IssuanceDate, cast(H.CustomerPoNo as varchar(50))  IssuanceNo,sum(Quantity) over(partition by G.Group_Name) Quantity,
+   I1.ItemName As ArticleName,Group_Name, sum(Quantity) as ArticleIn,0 as Balance                
+   from production.ProductionHead H inner join Production.ProductionProcessesDetails d                
+   on H.Voucher_Id = d.Voucher_Id Inner join setup.items I                       
+   on I.Item_Id = d.Item_Id Inner Join [Setup].[Items] I1                
+   on I1.Item_Id = d.Item_Id left join [Setup].[Groups] G           
+   on I.Group_Id = G.Group_Id           
+   where D.ProcessName = ''Gloves Stitching'' and D.AccountNo = '''+ Cast(@AccountNo as varchar(50)) +''' --and H.OperationType = 6          
+   and IsNull(IsDeleted,0) = 0            
+   group by WorkDate,CustomerPoNo,Quantity,I1.ItemName,G.Group_Name                 
+  )D group by IssuanceDate,IssuanceNo,Quantity,ArticleIn,Balance,ArticleName,Group_Name                
+     )x                
+            pivot                 
+            (                
+                sum(Quantity)                
+  for Group_Name in (' + @cols + ')                
+            ) p'            
+--print @Query                          
+exec(@query) 
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  
+CREATE Procedure [Reports].[Proc_GetLinkItemWiseStockAndBalance]                       
+@IdCompany uniqueidentifier,                                
+@IdItem uniqueidentifier                                    
+AS                                         
+select I.ItemNo,I.ItemName,                              
+isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(SRU,0) + isnull(ProcessInUnits,0) + isnull(SideUnits,0)                            
+ - (isnull(SoldUnits,0) + isnull(PRU,0) + isnull(ProcessOutUnits,0) + isnull(ChemUnits,0) + isnull(GenUnits,0)) as 'closing',   -- + isnull(ProductionIssueUnits,0)                    
+ case when isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(SRU,0) + isnull(ProcessInUnits,0) + isnull(MaterialUsed,0) + isnull(SideUnits,0)                            
+ - (isnull(SoldUnits,0) + isnull(PRU,0) + isnull(ProcessOutUnits,0) + isnull(ChemUnits,0)) < 0 Then 0 --+ isnull(ProductionIssueUnits,0)                        
+ else isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(SRU,0) + isnull(ProcessInUnits,0) + isnull(SideUnits,0)                            
+ - (isnull(SoldUnits,0) + isnull(PRU,0) + isnull(ProcessOutUnits,0)  + isnull(ChemUnits,0) + isnull(GenUnits,0) + isnull(MaterialUsed,0)) end Closing  --+ isnull(ProductionIssueUnits,0)            
+-- ,case when (isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(ReturnedUnits,0) + isnull(SampleReturnedUnits,0)) = 0                            
+-- Then 0                              
+-- else ((OpeningAmount + isnull(PurchaseAmount,0) + isnull(ReturnAmount,0) + isnull(SampleReturnAmount,0))                          
+-- / (isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(ReturnedUnits,0) + isnull(SampleReturnedUnits,0)))                          
+-- * (isnull(OpeningUnits,0) + isnull(PurchaseUnits,0) + isnull(ReturnedUnits,0) + isnull(SampleReturnedUnits,0)                           
+-- - (isnull(SoldUnits,0) + isnull(SampleUnits,0)))                            
+--end 'RemainingBalance'                                     
+from                                       
+(                                      
+ select * from [Setup].[Items] I where Item_Id = @IdItem                        
+)I                                      
+left join                                      
+(                                      
+ select I.Item_Id, sum(isnull(Units,0)) 'OpeningUnits', sum(isnull(unitprice,0) * isnull(Units,0)) OpeningAmount from [Setup].[Currentstock] I                         
+  where I.Item_Id = @IdItem                        
+ group by I.Item_Id                                      
+)I1 on I.Item_Id = I1.Item_Id                                      
+left join                                      
+(                                      
+ select P.Item_Id,sum(isnull(Units,0)) 'PurchaseUnits', sum(Isnull(P.Amount,0)) PurchaseAmount from Transactions.PurchaseDetail P                               
+ inner join [Transactions].[PurchaseHead] H                                 
+ on P.voucher_Id = H.Voucher_Id                                
+ where P.Item_Id = @IdItem and IsNull(H.IsDeleted,0) = 0 --and H.Purchaser in (2,3)                                  
+ group by P.Item_Id                                    
+)I2 on I.Item_Id = I2.Item_Id                        
+left join                                      
+(                                      
+ select P.Item_Id,sum(isnull(Units,0)) 'PRU', sum(Isnull(P.Amount,0)) PurchaseAmount from [Transactions].[PurchaseReturnDetail] P                               
+ inner join [Transactions].[PurchaseReturnHead] H                                 
+ on P.voucher_Id = H.Voucher_Id                                 
+ where P.Item_Id = @IdItem and IsNull(H.IsDeleted,0) = 0                                
+ group by P.Item_Id                                    
+)I3 on I.Item_Id = I3.Item_Id                                      
+left join                                      
+(                                      
+ select s.Item_Id,sum(isnull(Units,0)) 'SoldUnits' from Transactions.SalesDetail S inner join [Transactions].[SalesHead] H          
+ on S.voucher_Id = H.Voucher_Id                                
+ where s.Item_Id = @IdItem and IsNull(H.IsDeleted,0) = 0              
+ group by s.Item_Id                                      
+)I4 on I.Item_Id = I4.Item_Id                                      
+left join                                      
+(                 
+ select s.Item_Id,sum(isnull(Units,0)) 'SRU', sum(isnull(s.Amount,0)) ReturnAmount from Transactions.SalesReturnDetail S               
+ inner join [Transactions].[SalesReturnHead] H                   
+ on S.voucher_Id = H.Voucher_Id Inner Join [Setup].[Items] I on S.Item_Id = I.Item_Id                                   
+ where I.Item_Id = @IdItem and IsNull(H.IsDeleted,0) = 0                                     
+ group by s.Item_Id                                    
+)I5 on I.Item_Id = I5.Item_Id                               
+left join                                      
+(         
+  select sd.Item_Id,                      
+  case when I.PackingSize = 'Meter'                      
+  Then Convert(decimal(18,2),isnull(sum(Units),0))        
+  When I.PackingSize = 'Yard'        
+  Then Convert(decimal(18,2),sum(isnull(YardQty,0)))        
+  --Then Convert(decimal(18,2),sum(isnull(YardQty / 1.09,0)))        
+   end 'ProcessOutUnits'from transactions.workprocesshead H                                   
+ inner join [Transactions].[Workprocessdetail] sd Inner Join [Setup].[Items] I                               
+ on I.Item_Id = Sd.Item_Id                                                         
+ on Sd.voucher_Id = H.Voucher_Id                                      
+ where Sd.Item_Id = @IdItem and H.WorkType = 1 and IsNull(H.IsDeleted,0) = 0                
+ group by sd.Item_Id,I.PackingSize                                 
+ --select sd.Item_Id,sum(isnull(YardQty / 1.0936,0)) 'ProcessOutUnits' from transactions.workprocesshead H                               
+ --inner join [Transactions].[Workprocessdetail] sd                                      
+ --on H.voucher_Id = Sd.Voucher_Id                                 
+ --where Sd.Item_Id = @IdItem and H.WorkType = 1 and isnull(H.IsDeleted,0) = 0                        
+ --group by sd.Item_Id                                    
+)I6 on I.Item_Id = I6.Item_Id                               
+left join                                      
+(                
+ select sd.Item_Id,                      
+  case when I.PackingSize = 'Meter'                      
+  Then Convert(decimal(18,2),isnull(sum(Units),0))        
+  When I.PackingSize = 'Yard'        
+  Then Convert(decimal(18,2),sum(isnull(YardQty,0))) end 'ProcessInUnits'        
+ ,sum(sd.Amount) RubberingAmount from transactions.workprocesshead H                        
+ inner join [Transactions].[Workprocessdetail] sd Inner Join [Setup].[Items] I                               
+ on I.Item_Id = Sd.Item_Id                                            
+ on H.voucher_Id = Sd.Voucher_Id                                       
+ where Sd.Item_Id = @IdItem and H.WorkType = 2 and IsNull(H.IsDeleted,0) = 0                              
+ group by sd.Item_Id ,I.PackingSize                              
+ -- select sd.Item_Id,sum(isnull(YardQty,0)) 'ProcessInUnits'from transactions.workprocesshead H                             
+ --inner join [Transactions].[Workprocessdetail] sd                                      
+ --on Sd.voucher_Id = H.Voucher_Id                                
+ --where Sd.Item_Id = @IdItem and H.WorkType = 2 and isnull(H.IsDeleted,0) = 0                        
+ --group by sd.Item_Id                                    
+)I7 on I.Item_Id = I7.Item_Id                         
+--left join                                      
+--(                                      
+--  select sd.Item_Id,sum(isnull(Quantity,0)) 'ProductionIssueUnits'from [Production].[InventoryIssuanceHead] S                               
+-- inner join [Production].[InventoryIssuanceDetail] sd                                      
+-- on S.ProductionIssuance_Id = sd.InventoryIssuance_Id Inner Join [Setup].[Items] I on Sd.Item_Id = I.Item_Id                                   
+-- where Sd.Item_Id = @IdItem and S.IssuanceType = 1 and IsNull(S.IsDeleted,0) = 0                        
+-- group by sd.Item_Id               
+--)I8 on I.Item_Id = I8.Item_Id                         
+left join                                      
+(                                      
+  --select sd.Item_Id,sum(isnull(Quantity,0)) 'ProductionRecievedUnits'from [Production].[InventoryIssuanceHead] S                               
+  --inner join [Production].[InventoryIssuanceDetail] sd                                      
+  --on S.ProductionIssuance_Id = sd.InventoryIssuance_Id                        
+  --where Sd.Item_Id = @IdItem and S.IssuanceType = 2 and IsNull(S.IsDeleted,0) = 0                        
+  --group by sd.Item_Id             
+ select Item_Id, isnull(sum(UsedQuantity),0) 'MaterialUsed' from [Production].[MaterialUsed] D       
+ where Isnull(D.IsDeleted,0) = 0 and D.Item_Id = @IdItem and Department_Id = 0             
+ Group By Item_Id                       
+)I9 on I.Item_Id = I9.Item_Id                         
+left join                                      
+(                                      
+  select L.Item_Id,sum(isnull(CrustIssuedQuantity,0)) + sum(isnull(DyingIssuedQuantity,0)) + Sum(isnull(ReDyingIssuedQuantity,0)) ChemUnits from [Tannery].                 
+[LotChemicals] L                                      
+  where L.Item_Id = @IdItem                          
+  group by L.Item_Id                                    
+)I10 on I.Item_Id = I10.Item_Id                
+left join                                      
+(                                      
+  select G.Item_Id,sum(isnull(units,0)) GenUnits from [Transactions].[GeneralInventoryIssuanceDetail] G                                      
+  where G.Item_Id = @IdItem                       
+  group by G.Item_Id                                    
+)I11 on I.Item_Id = I11.Item_Id                  
+left join                                      
+(                                      
+ select sd.SideItem_Id,isnull(sum(Units),0) 'SideUnits' from transactions.workprocesshead H                             
+ inner join [Transactions].[Workprocessdetail] sd                                      
+ on Sd.voucher_Id = H.Voucher_Id                                
+ where Sd.SideItem_Id = @IdItem and H.WorkType = 1 and isnull(H.IsDeleted,0) = 0              
+ group by sd.SideItem_Id                                    
+)I12 on I.Item_Id = I12.SideItem_Id 
+
+
+Go
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Create Procedure [Transactions].[Proc_GetRubberingClosingStockToPartyLastEntry]  
+@IdVoucher uniqueidentifier,
+@IdItem uniqueidentifier,  
+@AccountNo varchar(20)  
+as
+select YardQty from  [Transactions].[WorkProcessDetail] D inner join [Transactions].[WorkProcessHead] W
+on W.Voucher_Id = D.Voucher_Id 
+ where W.WorkType = 2 and D.LinkItem_Id = @IdItem and W.AccountNo = @AccountNo  
+ and ISNULL(IsDeleted,0) = 0 and d.Voucher_Id = @IdVoucher  
+  
+Go
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ALTER Procedure [Transactions].[Proc_GetRepairStockByArticle]                  
+@IdArticle uniqueidentifier,              
+@ProductionType int                    
+as                
+select * from                 
+(                
+ select CONVERT(varchar(50), WorkDate,103) as 'VDate', 0 'RepairStock', RepairQuantity as 'RepairQuantity', 'Out' as 'GatePass' from [Production].[ProductionProcessesDetails] D             
+ Inner join [Production].[ProductionHead] H ON              
+ D.Voucher_Id = H.Voucher_Id                  
+ where d.Item_Id = @IdArticle and D.ProcessName = 'Gloves Inspection'     
+ and isnull(isdeleted,0) = 0 --d H.ProductionType = @ProductionType and H.IssuanceType = 1 and H.GatePassType = 'Gloves Repair'              
+ union all                
+ --select workdate as 'VDate', Quantity as 'RepairStock', 0 as 'RepairQuantity' ,'In' as 'GatePass'              
+ --from [Production].[ProductionProcessesDetails] D inner join [Production].[ProductionHead] H            
+ --on D.Voucher_Id = H.Voucher_Id              
+ --where D.Item_Id =  @IdArticle and D.ProcessName = 'Gloves Repair'--and H.ProductionType = @ProductionType and H.WorkType = 1            
+ --and isnull(isdeleted,0) = 0    
+ --and Quantity > 0       
+   
+ select CONVERT(varchar(50), d.vdate,103), UsedQuantity as  'RepairStock', 0 as 'RepairQuantity','In' as 'GatePass' from [Production].[Materialused] D             
+ Inner Join [Production].[ProductionHead] H On             
+ D.Voucher_Id = H.Voucher_Id             
+ Inner join [Setup].[Items] I ON              
+ d.Item_Id = I.Item_Id              
+ where D.SubProcessHead = 'Gloves Repair Material Usage'  
+              
+)X             
+order by VDate
+
+Go
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ALTER Procedure [Transactions].[Proc_GetReadyToInspectionStockByArticle]          
+@IdArticle uniqueidentifier,      
+@ProductionType int            
+as        
+select * from         
+(        
+ select CONVERT(varchar(50), WorkDate,103) as 'VDate', Quantity as 'ReadyForInspection',0 as 'PassQty', 'In' as 'GatePass' from [Production].[ProductionProcessesDetails] d     
+ Inner join [Production].[ProductionHead] H       
+ on D.Voucher_Id = H.Voucher_Id      
+ where d.Item_Id = @IdArticle and D.ProcessName = 'Gloves Stitching' --and H.ProductionType = @ProductionType and H.IssuanceType = 2      
+ union all        
+ select CONVERT(varchar(50), WorkDate,103) as 'VDate',0 as 'ReadyForInspection', Quantity 'PassQty','Out' as 'GatePass'      
+ from [Production].[ProductionProcessesDetails] D inner join [Production].[ProductionHead] H    
+ on D.Voucher_Id = H.Voucher_Id      
+ where D.Item_Id =  @IdArticle and Processname = 'Gloves Inspection' --H.ProductionType = @ProductionType and H.WorkType = 1          
+)X        
+order by X.VDate
+
+Go
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+ALTER Procedure [Transactions].[Proc_GetReadyToPackingStockByArticle]            
+@IdArticle uniqueidentifier,        
+@ProductionType int              
+as          
+select * from           
+(             
+ select  CONVERT(varchar(50), WorkDate,103) as 'VDate',ReadyUnits + BQuantity 'ReadyForPacking',0 as 'Packed' ,'In' as 'GatePass'        
+ from [Production].[ProductionProcessesDetails] D inner join [Production].[ProductionHead] H      
+ on D.Voucher_Id = H.Voucher_Id        
+ where D.Item_Id =  @IdArticle and D.ProcessName = 'Gloves Inspection' --and H.ProductionType = @ProductionType and H.WorkType = 1      
+ union all          
+ select  CONVERT(varchar(50), WorkDate,103) as 'VDate',0 as 'ReadyForPacking', ReadyUnits 'Packed','Out' as 'GatePass'          
+ from [Production].[ProductionProcessesDetails] D inner join [Production].[ProductionHead] H      
+ on D.Voucher_Id = H.Voucher_Id        
+ where D.Item_Id =  @IdArticle  and D.ProcessName = 'Gloves Packing' --and H.ProductionType = @ProductionType and H.WorkType = 2            
+)X          
+order by X.VDate 
+
+Go
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ALTER Procedure [Transactions].[Proc_GetGlovesGarmentsRejectionStockByArticle]            
+@IdArticle uniqueidentifier,        
+@ProductionType int,    
+@SaleType int             
+as          
+select * from           
+(       
+ select CONVERT(varchar(50), WorkDate,103) as VDate,Rejection,0 'RejectionSold' ,'In' as 'GatePass'        
+ from [Production].[ProductionProcessesDetails] D inner join [Production].[ProductionHead] H      
+ on D.Voucher_Id = H.Voucher_Id        
+ where D.Item_Id =  @IdArticle and D.ProcessName = 'Gloves Inspection' --H.ProductionType = @ProductionType and H.WorkType = 1            
+ union all    
+ select CONVERT(varchar(50), VDate,103),0 'Rejection', Units 'RejectionSold','Out' as 'GatePass' from [Transactions].[Salesdetail] d       
+ Inner join [Transactions].[SalesHead] H ON        
+ d.Voucher_Id = H.Voucher_Id    
+ where d.Item_Id = @IdArticle and H.SaleType = @SaleType             
+)X          
+order by X.VDate
+
+Go
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Go
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
